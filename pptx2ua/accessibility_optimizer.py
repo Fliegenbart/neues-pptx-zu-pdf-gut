@@ -714,6 +714,16 @@ Antworte nur mit A oder B."""
 
     def _generate_slide_narrative(self, slide: Slide, slide_type: ComplexSlideType) -> Optional[str]:
         """Generiert narrative Beschreibung für komplexe Folie mit Vision-LLM."""
+        # Einleitungssätze je nach Typ
+        type_intros = {
+            ComplexSlideType.TIMELINE: "Hier ist eine Zeitachse abgebildet",
+            ComplexSlideType.FLOWCHART: "Hier ist ein Prozessdiagramm abgebildet",
+            ComplexSlideType.ORG_CHART: "Hier ist ein Organigramm abgebildet",
+            ComplexSlideType.COMPARISON: "Hier ist eine Vergleichsdarstellung abgebildet",
+            ComplexSlideType.INFOGRAPHIC: "Hier ist ein komplexes Schaubild abgebildet",
+            ComplexSlideType.DIAGRAM: "Hier ist ein Diagramm abgebildet",
+        }
+
         # Typ-spezifische Prompts
         type_prompts = {
             ComplexSlideType.TIMELINE: """Analysiere diese Folie. Es ist eine TIMELINE/ROADMAP.
@@ -771,13 +781,23 @@ Maximal 200 Wörter, Fließtext.""",
         }
 
         type_instruction = type_prompts.get(slide_type, type_prompts[ComplexSlideType.INFOGRAPHIC])
+        intro = type_intros.get(slide_type, "Hier ist ein komplexes Schaubild abgebildet")
 
         # Wenn Folienbild verfügbar: Vision-LLM mit Bild
         if slide.slide_image:
-            return self._analyze_slide_with_vision(slide, type_instruction)
+            narrative = self._analyze_slide_with_vision(slide, type_instruction)
+        else:
+            # Fallback: Text-basierte Analyse
+            narrative = self._analyze_slide_with_text(slide, slide_type, type_instruction)
 
-        # Fallback: Text-basierte Analyse
-        return self._analyze_slide_with_text(slide, slide_type, type_instruction)
+        # Kombiniere Einleitung mit Beschreibung
+        if narrative:
+            # Extrahiere Thema aus Titel oder erstem Satz
+            topic = slide.title or "dieses Thema"
+            full_intro = f"{intro}, das {topic} darstellt."
+            return f"{full_intro}\n\n{narrative}"
+
+        return None
 
     def _analyze_slide_with_vision(self, slide: Slide, instruction: str) -> Optional[str]:
         """Analysiert Folie mit Vision-LLM und echtem Bild."""
