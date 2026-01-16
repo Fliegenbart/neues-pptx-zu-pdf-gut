@@ -184,11 +184,15 @@ class Slide:
     number: int
     blocks: list[Block] = field(default_factory=list)
     notes: Optional[str] = None
-    
+
     # Layout-Metadaten
     width_mm: float = 254.0   # 16:9 Standard
     height_mm: float = 142.9
     background_color: str = "FFFFFF"
+
+    # Folienbild für Vision-Analyse
+    slide_image: Optional[bytes] = None  # PNG-Daten der gerenderten Folie
+    slide_image_path: Optional[Path] = None  # Oder Pfad zum Bild
     
     @property
     def title(self) -> Optional[str]:

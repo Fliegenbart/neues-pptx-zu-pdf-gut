@@ -57,7 +57,7 @@ class AccessibilityConfig:
     """Konfiguration für Accessibility-Optimierung."""
     ollama_url: str = "http://localhost:11434"
     model: str = "llama3.2:3b"  # Schnelles Modell für Analyse
-    vision_model: str = "llava:13b"  # Für Bild-Analyse
+    vision_model: str = "qwen2.5vl:7b"  # Bestes lokales Vision-Modell für Diagramme
     language: str = "de"
 
     # Docling Integration
@@ -714,6 +714,121 @@ Antworte nur mit A oder B."""
 
     def _generate_slide_narrative(self, slide: Slide, slide_type: ComplexSlideType) -> Optional[str]:
         """Generiert narrative Beschreibung für komplexe Folie mit Vision-LLM."""
+        # Typ-spezifische Prompts
+        type_prompts = {
+            ComplexSlideType.TIMELINE: """Analysiere diese Folie. Es ist eine TIMELINE/ROADMAP.
+
+Beschreibe für einen blinden Menschen:
+1. Den Gesamtzeitraum (von wann bis wann)
+2. Die Phasen/Meilensteine in CHRONOLOGISCHER Reihenfolge
+3. Was bereits abgeschlossen ist (Häkchen = erledigt)
+4. Was aktuell läuft und was geplant ist
+
+Wichtig: Folge den Pfeilen/der visuellen Zeitachse, NICHT der Textposition!
+Maximal 200 Wörter, Fließtext.""",
+
+            ComplexSlideType.FLOWCHART: """Analysiere diese Folie. Es ist ein PROZESS/FLUSSDIAGRAMM.
+
+Beschreibe für einen blinden Menschen:
+1. Den Startpunkt des Prozesses
+2. Die Schritte in der RICHTIGEN Ablauf-Reihenfolge (folge den Pfeilen!)
+3. Verzweigungen und Entscheidungspunkte
+4. Das Endergebnis
+
+Wichtig: Folge dem visuellen Fluss, NICHT der Textposition!
+Maximal 200 Wörter, Fließtext.""",
+
+            ComplexSlideType.ORG_CHART: """Analysiere diese Folie. Es ist ein ORGANIGRAMM.
+
+Beschreibe für einen blinden Menschen:
+1. Die oberste Ebene (Leitung/Chef)
+2. Die Struktur darunter (wer berichtet an wen)
+3. Die verschiedenen Abteilungen/Bereiche
+
+Wichtig: Beschreibe die Hierarchie von oben nach unten!
+Maximal 200 Wörter, Fließtext.""",
+
+            ComplexSlideType.COMPARISON: """Analysiere diese Folie. Es ist ein VERGLEICH.
+
+Beschreibe für einen blinden Menschen:
+1. Was wird verglichen (welche Optionen/Varianten)
+2. Die wichtigsten Unterschiede
+3. Vor- und Nachteile jeder Option
+4. Falls vorhanden: Empfehlung oder Fazit
+
+Maximal 200 Wörter, Fließtext.""",
+
+            ComplexSlideType.INFOGRAPHIC: """Analysiere diese Folie. Es ist eine KOMPLEXE INFOGRAFIK.
+
+Beschreibe für einen blinden Menschen:
+1. Das Hauptthema der Folie
+2. Die wichtigsten Informationen und Zahlen
+3. Wie die Elemente zusammenhängen
+4. Die Kernaussage
+
+Wichtig: Ordne die Informationen LOGISCH, nicht nach Position!
+Maximal 200 Wörter, Fließtext.""",
+        }
+
+        type_instruction = type_prompts.get(slide_type, type_prompts[ComplexSlideType.INFOGRAPHIC])
+
+        # Wenn Folienbild verfügbar: Vision-LLM mit Bild
+        if slide.slide_image:
+            return self._analyze_slide_with_vision(slide, type_instruction)
+
+        # Fallback: Text-basierte Analyse
+        return self._analyze_slide_with_text(slide, slide_type, type_instruction)
+
+    def _analyze_slide_with_vision(self, slide: Slide, instruction: str) -> Optional[str]:
+        """Analysiert Folie mit Vision-LLM und echtem Bild."""
+        prompt = f"""Du bist ein Accessibility-Experte. Du hilfst blinden Menschen,
+visuelle Präsentationsfolien zu verstehen.
+
+Folientitel: "{slide.title or 'Ohne Titel'}"
+
+{instruction}
+
+WICHTIG:
+- Beschreibe was du SIEHST (Pfeile, Farben, Positionen, Verbindungen)
+- Beginne NICHT mit "Diese Folie zeigt..." oder "Das Bild zeigt..."
+- Beginne direkt mit dem Inhalt
+- Fließtext, keine Aufzählungen
+
+Deine Beschreibung:"""
+
+        try:
+            image_b64 = base64.b64encode(slide.slide_image).decode('utf-8')
+
+            response = requests.post(
+                f"{self.config.ollama_url}/api/generate",
+                json={
+                    "model": self.config.vision_model,
+                    "prompt": prompt,
+                    "images": [image_b64],
+                    "stream": False,
+                    "options": {"temperature": 0.3, "num_predict": 500}
+                },
+                timeout=120  # Vision braucht länger
+            )
+
+            if response.status_code == 200:
+                narrative = response.json().get("response", "").strip()
+                # Bereinige typische Einleitungen
+                narrative = re.sub(
+                    r'^(diese folie zeigt|die folie zeigt|das bild zeigt|hier sehen wir|'
+                    r'auf dieser folie|die präsentation zeigt|ich sehe)[:\s]*',
+                    '', narrative, flags=re.IGNORECASE
+                ).strip()
+                if narrative:
+                    return narrative
+
+        except Exception as e:
+            print(f"      Vision-Analyse Fehler: {e}")
+
+        return None
+
+    def _analyze_slide_with_text(self, slide: Slide, slide_type: ComplexSlideType, instruction: str) -> Optional[str]:
+        """Fallback: Analysiert Folie nur mit extrahiertem Text."""
         # Sammle alle Textinhalte mit Position
         content_items = []
         for block in slide.blocks:
@@ -732,69 +847,20 @@ Antworte nur mit A oder B."""
         content_items.sort(key=lambda x: (x["y"], x["x"]))
         content_text = "\n".join(f"- {item['text']}" for item in content_items[:20])
 
-        # Typ-spezifische Prompts
-        type_prompts = {
-            ComplexSlideType.TIMELINE: """Diese Folie zeigt eine TIMELINE/ROADMAP.
-Beschreibe die zeitliche Abfolge chronologisch. Nenne:
-1. Den Gesamtzeitraum
-2. Die wichtigsten Meilensteine/Phasen in zeitlicher Reihenfolge
-3. Den aktuellen Stand (falls erkennbar)
-4. Was als nächstes geplant ist
-
-Format: Fließtext, als würdest du einem blinden Kollegen die Folie erklären.""",
-
-            ComplexSlideType.FLOWCHART: """Diese Folie zeigt einen PROZESS/FLUSSDIAGRAMM.
-Beschreibe den Ablauf logisch. Nenne:
-1. Den Startpunkt
-2. Die Schritte in der richtigen Reihenfolge
-3. Eventuelle Verzweigungen/Entscheidungen
-4. Das Endergebnis
-
-Format: Fließtext, als würdest du einem blinden Kollegen den Prozess erklären.""",
-
-            ComplexSlideType.ORG_CHART: """Diese Folie zeigt ein ORGANIGRAMM/STRUKTUR.
-Beschreibe die Hierarchie. Nenne:
-1. Die oberste Ebene
-2. Die Struktur darunter
-3. Wichtige Verbindungen
-
-Format: Fließtext, als würdest du einem blinden Kollegen die Organisation erklären.""",
-
-            ComplexSlideType.COMPARISON: """Diese Folie zeigt einen VERGLEICH.
-Beschreibe die Gegenüberstellung. Nenne:
-1. Was verglichen wird
-2. Die wichtigsten Unterschiede
-3. Falls vorhanden: eine Empfehlung/Fazit
-
-Format: Fließtext, als würdest du einem blinden Kollegen den Vergleich erklären.""",
-
-            ComplexSlideType.INFOGRAPHIC: """Diese Folie zeigt eine KOMPLEXE INFOGRAFIK.
-Beschreibe den Inhalt strukturiert. Fasse zusammen:
-1. Das Hauptthema
-2. Die wichtigsten Informationen
-3. Zusammenhänge zwischen den Elementen
-
-Format: Fließtext, als würdest du einem blinden Kollegen die Infografik erklären.""",
-        }
-
-        type_instruction = type_prompts.get(slide_type, type_prompts[ComplexSlideType.INFOGRAPHIC])
-
         prompt = f"""Du bist ein Accessibility-Experte. Du hilfst blinden Menschen,
 visuelle Präsentationsfolien zu verstehen.
 
 Folientitel: "{slide.title or 'Ohne Titel'}"
 
-{type_instruction}
+{instruction}
 
-Die Folie enthält folgende Textelemente (nicht in der richtigen Lesereihenfolge!):
+Die Folie enthält folgende Textelemente (NICHT in der richtigen Lesereihenfolge!):
 {content_text}
 
 WICHTIG:
 - Ordne die Informationen LOGISCH, nicht nach Textposition
 - Für Timelines: CHRONOLOGISCH ordnen
 - Für Prozesse: Nach ABLAUF ordnen
-- Maximal 150 Wörter
-- Keine Aufzählungen, sondern Fließtext
 - Beginne direkt mit dem Inhalt, nicht mit "Diese Folie zeigt..."
 
 Deine Beschreibung:"""
@@ -813,14 +879,13 @@ Deine Beschreibung:"""
 
             if response.status_code == 200:
                 narrative = response.json().get("response", "").strip()
-                # Bereinige
                 narrative = re.sub(r'^(diese folie zeigt|die folie zeigt|hier sehen wir)',
                                    '', narrative, flags=re.IGNORECASE).strip()
                 if narrative:
                     return narrative
 
         except Exception as e:
-            print(f"      Fehler bei Narrative-Generierung: {e}")
+            print(f"      Text-Analyse Fehler: {e}")
 
         return None
 

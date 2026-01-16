@@ -23,6 +23,7 @@ from .renderer import PDFUARenderer, RendererConfig
 from .validator import PDFUAValidator
 from .accessibility_optimizer import AccessibilityOptimizer, AccessibilityConfig
 from .models import SlideModel
+from .slide_renderer import populate_slide_images, is_libreoffice_available
 
 
 class Pipeline:
@@ -136,10 +137,22 @@ class Pipeline:
                 if self.verbose:
                     print("   ⏭️  KI deaktiviert")
             
+            # 2b. Folienbilder für Vision-Analyse rendern
+            if self.verbose:
+                print("\n🖼️  Schritt 2b: Folienbilder rendern...")
+
+            if is_libreoffice_available():
+                success = populate_slide_images(model, input_pptx)
+                if success and self.verbose:
+                    slides_with_images = sum(1 for s in model.slides if s.slide_image)
+                    print(f"   ✓ {slides_with_images} Folienbilder für Vision-Analyse")
+            elif self.verbose:
+                print("   ⚠️  LibreOffice nicht installiert - Vision-Analyse nur text-basiert")
+
             # 3. Accessibility Optimization
             if self.verbose:
                 print("\n♿ Schritt 3/5: Accessibility-Optimierung...")
-            
+
             if self.optimizer and self.optimize_accessibility:
                 model = self.optimizer.optimize(model, verbose=self.verbose)
             elif self.optimize_accessibility and not self.optimizer:

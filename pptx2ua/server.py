@@ -27,6 +27,7 @@ from .enricher import Enricher, EnricherConfig, EnricherBackend
 from .renderer import PDFUARenderer, RendererConfig
 from .validator import PDFUAValidator
 from .accessibility_optimizer import AccessibilityOptimizer, AccessibilityConfig
+from .slide_renderer import populate_slide_images, is_libreoffice_available
 
 # Logger
 logger = logging.getLogger(__name__)
@@ -686,6 +687,14 @@ def run_conversion(
         ))
         if enricher.is_available:
             model = enricher.enrich(model, verbose=False)
+
+    # 2b. Folienbilder für Vision-Analyse rendern
+    if enable_ai and is_libreoffice_available():
+        try:
+            populate_slide_images(model, input_path)
+            result["stats"]["slide_images"] = sum(1 for s in model.slides if s.slide_image)
+        except Exception as e:
+            logger.warning(f"Slide rendering failed: {e}")
 
     # 3. Accessibility Optimize
     if enable_ai:
