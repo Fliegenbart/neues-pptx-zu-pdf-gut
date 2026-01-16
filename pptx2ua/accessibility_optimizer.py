@@ -41,6 +41,17 @@ class ElementRole(Enum):
     PLACEHOLDER = "placeholder"  # Leere Template-Texte
 
 
+class ComplexSlideType(Enum):
+    """Typen von visuell komplexen Folien."""
+    TIMELINE = "timeline"           # Zeitachsen, Roadmaps
+    FLOWCHART = "flowchart"         # Flussdiagramme, Prozesse
+    ORG_CHART = "org_chart"         # Organigramme
+    COMPARISON = "comparison"       # Vergleichstabellen, vs-Layouts
+    INFOGRAPHIC = "infographic"     # Komplexe Infografiken
+    DIAGRAM = "diagram"             # Sonstige Diagramme
+    SIMPLE = "simple"               # Einfache Folie, keine Spezialbehandlung
+
+
 @dataclass
 class AccessibilityConfig:
     """Konfiguration für Accessibility-Optimierung."""
@@ -63,6 +74,10 @@ class AccessibilityConfig:
     naturalize_tables: bool = True
     naturalize_charts: bool = True
 
+    # NEU: Vision-LLM für komplexe Folien
+    use_vision_for_complex_slides: bool = True  # Ganze Folie analysieren
+    complex_slide_types: list = None  # Welche Typen erkennen
+
     # Schwellwerte
     complex_slide_threshold: int = 6  # Blöcke ab denen Zusammenfassung
     redundancy_hash_threshold: int = 2  # Ab wann Element als redundant gilt
@@ -73,6 +88,16 @@ class AccessibilityConfig:
     remove_empty_placeholders: bool = True # Leere "Titel eingeben" Texte
     remove_navigation_hints: bool = True   # "Klicken Sie hier", etc.
     simplify_contact_info: bool = True     # Kontaktdaten nur einmal
+
+    def __post_init__(self):
+        if self.complex_slide_types is None:
+            self.complex_slide_types = [
+                ComplexSlideType.TIMELINE,
+                ComplexSlideType.FLOWCHART,
+                ComplexSlideType.ORG_CHART,
+                ComplexSlideType.COMPARISON,
+                ComplexSlideType.INFOGRAPHIC,
+            ]
 
 
 @dataclass
@@ -191,6 +216,12 @@ class AccessibilityOptimizer:
         if verbose:
             print("   🧹 Phase 3b: Unnötige Informationen filtern...")
         self._remove_unnecessary_info(model)
+
+        # Phase 3c: Komplexe Folien mit Vision-LLM analysieren
+        if self.config.use_vision_for_complex_slides and self._llm_available:
+            if verbose:
+                print("   🔍 Phase 3c: Komplexe Folien analysieren (Vision-LLM)...")
+            self._analyze_complex_slides_with_vision(model)
 
         # Phase 4: Fußnoten inline auflösen
         if self.config.inline_footnotes:
@@ -530,6 +561,268 @@ Antworte nur mit A oder B."""
         else:
             block.a11y.role = role
             block.a11y.skip_reason = reason
+
+    # === Phase 3c: Komplexe Folien mit Vision-LLM ===
+
+    def _analyze_complex_slides_with_vision(self, model: SlideModel):
+        """Analysiert komplexe Folien mit Vision-LLM für bessere Beschreibungen."""
+        for slide in model.slides:
+            slide_type = self._detect_slide_type(slide)
+
+            if slide_type != ComplexSlideType.SIMPLE:
+                # Komplexe Folie gefunden - Vision-LLM Analyse
+                narrative = self._generate_slide_narrative(slide, slide_type)
+
+                if narrative:
+                    # Markiere alle bestehenden Blöcke als "ersetzt"
+                    for block in slide.blocks:
+                        if not hasattr(block, 'a11y') or block.a11y is None:
+                            block.a11y = AccessibilityAnnotation(
+                                role=ElementRole.REDUNDANT,
+                                skip_reason="Ersetzt durch Folien-Narrative"
+                            )
+                        else:
+                            block.a11y.role = ElementRole.REDUNDANT
+
+                    # Füge narrative Beschreibung als neuen Block ein
+                    narrative_block = Block(
+                        block_type=BlockType.PARAGRAPH,
+                        reading_order=1,
+                        paragraphs=[Paragraph(runs=[TextRun(text=narrative)])]
+                    )
+                    narrative_block.a11y = AccessibilityAnnotation(
+                        role=ElementRole.ESSENTIAL,
+                        screen_reader_text=narrative
+                    )
+
+                    # Behalte nur Titel + Narrative
+                    title_block = None
+                    for block in slide.blocks:
+                        if block.block_type == BlockType.HEADING and block.heading_level == 1:
+                            title_block = block
+                            title_block.a11y = AccessibilityAnnotation(role=ElementRole.ESSENTIAL)
+                            title_block.reading_order = 0
+                            break
+
+                    if title_block:
+                        slide.blocks = [title_block, narrative_block]
+                    else:
+                        slide.blocks = [narrative_block]
+
+    def _detect_slide_type(self, slide: Slide) -> ComplexSlideType:
+        """Erkennt den Typ einer komplexen Folie basierend auf Indikatoren."""
+        all_text = " ".join(b.text.lower() for b in slide.blocks if b.text)
+        block_count = len(slide.blocks)
+
+        # Timeline/Roadmap Indikatoren
+        timeline_indicators = [
+            r'\b(20\d{2})\b',  # Jahreszahlen 2000-2099
+            r'\b(q[1-4])\b',   # Q1, Q2, etc.
+            r'\b(phase\s*\d)\b',
+            r'\b(schritt\s*\d)\b',
+            r'\b(step\s*\d)\b',
+            r'(→|➔|➜|▶|►)',   # Pfeile
+            r'\b(roadmap|timeline|zeitachse|meilenstein)\b',
+        ]
+
+        timeline_score = 0
+        for pattern in timeline_indicators:
+            if re.search(pattern, all_text, re.IGNORECASE):
+                timeline_score += 1
+
+        # Viele Jahreszahlen = sehr wahrscheinlich Timeline
+        year_matches = re.findall(r'\b(20\d{2})\b', all_text)
+        if len(year_matches) >= 3:
+            timeline_score += 3
+
+        if timeline_score >= 3:
+            return ComplexSlideType.TIMELINE
+
+        # Flowchart Indikatoren
+        flowchart_indicators = [
+            r'\b(wenn|dann|sonst|if|then|else)\b',
+            r'\b(entscheidung|decision)\b',
+            r'\b(prozess|process|ablauf)\b',
+            r'\b(start|ende|end)\b',
+            r'(→|➔|➜|▶|►|↓|↑)',
+        ]
+
+        flowchart_score = 0
+        for pattern in flowchart_indicators:
+            if re.search(pattern, all_text, re.IGNORECASE):
+                flowchart_score += 1
+
+        if flowchart_score >= 3:
+            return ComplexSlideType.FLOWCHART
+
+        # Organigramm Indikatoren
+        org_indicators = [
+            r'\b(ceo|cto|cfo|coo)\b',
+            r'\b(leiter|manager|direktor|vorstand)\b',
+            r'\b(abteilung|team|bereich)\b',
+            r'\b(organisation|struktur)\b',
+        ]
+
+        org_score = 0
+        for pattern in org_indicators:
+            if re.search(pattern, all_text, re.IGNORECASE):
+                org_score += 1
+
+        if org_score >= 2:
+            return ComplexSlideType.ORG_CHART
+
+        # Vergleich Indikatoren
+        comparison_indicators = [
+            r'\b(vs\.?|versus|vergleich|compared)\b',
+            r'\b(vorher|nachher|before|after)\b',
+            r'\b(alt|neu|old|new)\b',
+            r'\b(pro|contra|vorteil|nachteil)\b',
+        ]
+
+        comparison_score = 0
+        for pattern in comparison_indicators:
+            if re.search(pattern, all_text, re.IGNORECASE):
+                comparison_score += 1
+
+        if comparison_score >= 2:
+            return ComplexSlideType.COMPARISON
+
+        # Viele verstreute Blöcke = wahrscheinlich komplexes Layout
+        if block_count >= 8:
+            # Prüfe ob Blöcke visuell verstreut sind
+            if self._has_scattered_layout(slide):
+                return ComplexSlideType.INFOGRAPHIC
+
+        return ComplexSlideType.SIMPLE
+
+    def _has_scattered_layout(self, slide: Slide) -> bool:
+        """Prüft ob Blöcke über die Folie verstreut sind (nicht linear)."""
+        blocks_with_bbox = [b for b in slide.blocks if b.bbox]
+
+        if len(blocks_with_bbox) < 4:
+            return False
+
+        # Prüfe Y-Positionen - wenn viele auf ähnlicher Höhe aber unterschiedlichem X
+        y_positions = sorted([b.bbox.y for b in blocks_with_bbox])
+        x_positions = sorted([b.bbox.x for b in blocks_with_bbox])
+
+        # Wenn X-Varianz hoch und mehrere Y-Cluster = verstreut
+        x_range = max(x_positions) - min(x_positions) if x_positions else 0
+        y_clusters = len(set(round(y / 50) for y in y_positions))  # ~50mm Cluster
+
+        return x_range > 150 and y_clusters >= 3
+
+    def _generate_slide_narrative(self, slide: Slide, slide_type: ComplexSlideType) -> Optional[str]:
+        """Generiert narrative Beschreibung für komplexe Folie mit Vision-LLM."""
+        # Sammle alle Textinhalte mit Position
+        content_items = []
+        for block in slide.blocks:
+            if block.text and block.bbox:
+                content_items.append({
+                    "text": block.text.strip(),
+                    "x": block.bbox.x,
+                    "y": block.bbox.y,
+                    "type": block.block_type.value
+                })
+
+        if not content_items:
+            return None
+
+        # Sortiere nach Position für Kontext
+        content_items.sort(key=lambda x: (x["y"], x["x"]))
+        content_text = "\n".join(f"- {item['text']}" for item in content_items[:20])
+
+        # Typ-spezifische Prompts
+        type_prompts = {
+            ComplexSlideType.TIMELINE: """Diese Folie zeigt eine TIMELINE/ROADMAP.
+Beschreibe die zeitliche Abfolge chronologisch. Nenne:
+1. Den Gesamtzeitraum
+2. Die wichtigsten Meilensteine/Phasen in zeitlicher Reihenfolge
+3. Den aktuellen Stand (falls erkennbar)
+4. Was als nächstes geplant ist
+
+Format: Fließtext, als würdest du einem blinden Kollegen die Folie erklären.""",
+
+            ComplexSlideType.FLOWCHART: """Diese Folie zeigt einen PROZESS/FLUSSDIAGRAMM.
+Beschreibe den Ablauf logisch. Nenne:
+1. Den Startpunkt
+2. Die Schritte in der richtigen Reihenfolge
+3. Eventuelle Verzweigungen/Entscheidungen
+4. Das Endergebnis
+
+Format: Fließtext, als würdest du einem blinden Kollegen den Prozess erklären.""",
+
+            ComplexSlideType.ORG_CHART: """Diese Folie zeigt ein ORGANIGRAMM/STRUKTUR.
+Beschreibe die Hierarchie. Nenne:
+1. Die oberste Ebene
+2. Die Struktur darunter
+3. Wichtige Verbindungen
+
+Format: Fließtext, als würdest du einem blinden Kollegen die Organisation erklären.""",
+
+            ComplexSlideType.COMPARISON: """Diese Folie zeigt einen VERGLEICH.
+Beschreibe die Gegenüberstellung. Nenne:
+1. Was verglichen wird
+2. Die wichtigsten Unterschiede
+3. Falls vorhanden: eine Empfehlung/Fazit
+
+Format: Fließtext, als würdest du einem blinden Kollegen den Vergleich erklären.""",
+
+            ComplexSlideType.INFOGRAPHIC: """Diese Folie zeigt eine KOMPLEXE INFOGRAFIK.
+Beschreibe den Inhalt strukturiert. Fasse zusammen:
+1. Das Hauptthema
+2. Die wichtigsten Informationen
+3. Zusammenhänge zwischen den Elementen
+
+Format: Fließtext, als würdest du einem blinden Kollegen die Infografik erklären.""",
+        }
+
+        type_instruction = type_prompts.get(slide_type, type_prompts[ComplexSlideType.INFOGRAPHIC])
+
+        prompt = f"""Du bist ein Accessibility-Experte. Du hilfst blinden Menschen,
+visuelle Präsentationsfolien zu verstehen.
+
+Folientitel: "{slide.title or 'Ohne Titel'}"
+
+{type_instruction}
+
+Die Folie enthält folgende Textelemente (nicht in der richtigen Lesereihenfolge!):
+{content_text}
+
+WICHTIG:
+- Ordne die Informationen LOGISCH, nicht nach Textposition
+- Für Timelines: CHRONOLOGISCH ordnen
+- Für Prozesse: Nach ABLAUF ordnen
+- Maximal 150 Wörter
+- Keine Aufzählungen, sondern Fließtext
+- Beginne direkt mit dem Inhalt, nicht mit "Diese Folie zeigt..."
+
+Deine Beschreibung:"""
+
+        try:
+            response = requests.post(
+                f"{self.config.ollama_url}/api/generate",
+                json={
+                    "model": self.config.model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.3, "num_predict": 400}
+                },
+                timeout=60
+            )
+
+            if response.status_code == 200:
+                narrative = response.json().get("response", "").strip()
+                # Bereinige
+                narrative = re.sub(r'^(diese folie zeigt|die folie zeigt|hier sehen wir)',
+                                   '', narrative, flags=re.IGNORECASE).strip()
+                if narrative:
+                    return narrative
+
+        except Exception as e:
+            print(f"      Fehler bei Narrative-Generierung: {e}")
+
+        return None
 
     # === Phase 4: Fußnoten Inline ===
 
