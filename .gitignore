@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.pdf
+*.html
+
+# Test files
+PIT_*.pptx
+PIT_*.pdf
+PIT_*.html
+
+# Temp
+*.tmp
+*.temp
+.cache/

@@ -1,0 +1,112 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pptx2ua"
+version = "0.1.0"
+description = "PPTX zu PDF/UA Konverter - DSGVO-konforme Barrierefreiheit"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "DRV rvEvolution Team Fackel" }
+]
+keywords = [
+    "accessibility", 
+    "pdf", 
+    "pptx", 
+    "pdf-ua", 
+    "wcag", 
+    "bitv",
+    "barrierefrei"
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Text Processing :: Markup",
+]
+
+dependencies = [
+    # PPTX Parsing
+    "python-pptx>=0.6.21",
+    
+    # PDF Rendering
+    "weasyprint>=60.0",
+    
+    # PDF Manipulation
+    "pikepdf>=8.0.0",
+    
+    # HTTP für Ollama
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+# Docling für erweiterte Dokumentanalyse
+docling = [
+    "docling>=2.0.0",
+]
+
+# Web-Server
+web = [
+    "fastapi>=0.100.0",
+    "uvicorn>=0.20.0",
+    "python-multipart>=0.0.6",
+]
+
+# Für veraPDF Integration
+validation = [
+    # veraPDF muss separat installiert werden
+]
+
+# Alle Extras
+all = [
+    "pptx2ua[dev]",
+    "pptx2ua[docling]",
+    "pptx2ua[web]",
+]
+
+[project.scripts]
+pptx2ua = "pptx2ua.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/drv-rvevolution/pptx2ua"
+Documentation = "https://github.com/drv-rvevolution/pptx2ua#readme"
+Repository = "https://github.com/drv-rvevolution/pptx2ua"
+Issues = "https://github.com/drv-rvevolution/pptx2ua/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["pptx2ua"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "W", "I", "N", "D", "UP"]
+ignore = ["D100", "D104"]  # Missing docstring in public module/package
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
