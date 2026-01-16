@@ -781,18 +781,31 @@ Maximal 200 Wörter, Fließtext.""",
 
     def _analyze_slide_with_vision(self, slide: Slide, instruction: str) -> Optional[str]:
         """Analysiert Folie mit Vision-LLM und echtem Bild."""
-        prompt = f"""Du bist ein Accessibility-Experte. Du hilfst blinden Menschen,
-visuelle Präsentationsfolien zu verstehen.
+        prompt = f"""Du bist ein Experte für Barrierefreiheit. Deine Aufgabe: Beschreibe diese
+Präsentationsfolie so, dass ein blinder Mensch den INHALT vollständig versteht.
 
 Folientitel: "{slide.title or 'Ohne Titel'}"
 
+ANALYSIERE DAS BILD SCHRITT FÜR SCHRITT:
+
+1. STRUKTUR: Was für ein Diagramm/Layout siehst du?
+   (Timeline? Prozess? Organigramm? Vergleich? Liste?)
+
+2. VISUELLE HINWEISE beachten:
+   - Pfeile → zeigen Richtung/Ablauf
+   - Häkchen ✓ → abgeschlossen/erledigt
+   - Farben → Gruppierungen oder Status
+   - Position → zeitliche oder hierarchische Ordnung
+
+3. INHALT in LOGISCHER Reihenfolge:
 {instruction}
 
-WICHTIG:
-- Beschreibe was du SIEHST (Pfeile, Farben, Positionen, Verbindungen)
-- Beginne NICHT mit "Diese Folie zeigt..." oder "Das Bild zeigt..."
-- Beginne direkt mit dem Inhalt
-- Fließtext, keine Aufzählungen
+AUSGABE-FORMAT:
+- Beginne DIREKT mit dem Inhalt (NICHT "Diese Folie zeigt...")
+- Schreibe einen zusammenhängenden Fließtext (KEINE Aufzählungspunkte)
+- Beschreibe in der Reihenfolge, die SINN ergibt (chronologisch, hierarchisch, etc.)
+- Maximal 250 Wörter
+- Auf Deutsch
 
 Deine Beschreibung:"""
 
