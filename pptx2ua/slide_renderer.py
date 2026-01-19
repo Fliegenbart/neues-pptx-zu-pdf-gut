@@ -62,6 +62,8 @@ def render_slides_to_images(
     Returns:
         Liste der Bildpfade, sortiert nach Foliennummer
     """
+    pptx_path = Path(pptx_path)  # Sicherstellen dass es ein Path ist
+
     soffice = get_libreoffice_command()
     if not soffice:
         print("   ⚠️  LibreOffice nicht gefunden - Folienbilder nicht verfügbar")
@@ -124,6 +126,8 @@ def render_pptx_via_pdf(
 
     Nützlich wenn direkte PNG-Konvertierung nicht funktioniert.
     """
+    pptx_path = Path(pptx_path)  # Sicherstellen dass es ein Path ist
+
     soffice = get_libreoffice_command()
     if not soffice:
         return []
@@ -225,12 +229,15 @@ def populate_slide_images(model: SlideModel, pptx_path: Path) -> bool:
     with tempfile.TemporaryDirectory(prefix="pptx2ua_") as tmpdir:
         output_dir = Path(tmpdir)
 
-        # Methode 1: Direkte PNG-Konvertierung
-        image_paths = render_slides_to_images(pptx_path, output_dir)
+        # Methode 1: Über PDF (zuverlässiger für mehrere Seiten)
+        # LibreOffice PNG-Export erstellt nur 1 Bild für ganze Präsentation
+        image_paths = render_pptx_via_pdf(pptx_path, output_dir)
 
-        # Methode 2: Über PDF wenn direkt nicht klappt
-        if not image_paths:
-            image_paths = render_pptx_via_pdf(pptx_path, output_dir)
+        # Methode 2: Direkte PNG falls PDF fehlschlägt
+        if not image_paths or len(image_paths) == 1:
+            image_paths_direct = render_slides_to_images(pptx_path, output_dir)
+            if len(image_paths_direct) > len(image_paths):
+                image_paths = image_paths_direct
 
         if not image_paths:
             return False

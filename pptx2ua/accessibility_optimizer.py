@@ -21,6 +21,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Optional
 from enum import Enum
+from pathlib import Path
 import base64
 import requests
 
@@ -28,6 +29,13 @@ from .models import (
     SlideModel, Slide, Block, BlockType,
     Paragraph, TextRun, Figure, Table
 )
+
+# Optionaler Import für Folienbilder
+try:
+    from .slide_renderer import populate_slide_images, is_libreoffice_available
+    _slide_extraction_available = True
+except ImportError:
+    _slide_extraction_available = False
 
 
 class ElementRole(Enum):
@@ -178,19 +186,69 @@ class AccessibilityOptimizer:
             print(f"   Docling-Analyse fehlgeschlagen: {e}")
             return False
     
-    def optimize(self, model: SlideModel, verbose: bool = True) -> SlideModel:
+    def load_slide_images(self, model: SlideModel, pptx_path: Path | str, verbose: bool = True) -> bool:
+        """
+        Lädt Folienbilder aus PPTX für Vision-LLM Analyse.
+
+        Args:
+            model: Das SlideModel
+            pptx_path: Pfad zur Original-PPTX
+            verbose: Fortschrittsausgabe
+
+        Returns:
+            True wenn erfolgreich
+        """
+        if not _slide_extraction_available:
+            if verbose:
+                print("   ⚠️  Folienbilder-Extraktion nicht verfügbar")
+            return False
+
+        if not is_libreoffice_available():
+            if verbose:
+                print("   ⚠️  LibreOffice nicht gefunden - keine Folienbilder")
+            return False
+
+        try:
+            if verbose:
+                print("   🖼️  Extrahiere Folienbilder...")
+
+            pptx_path = Path(pptx_path)
+            success = populate_slide_images(model, pptx_path)
+
+            if not success:
+                if verbose:
+                    print("   ⚠️  Keine Folienbilder extrahiert")
+                return False
+
+            slides_with_images = sum(1 for s in model.slides if s.slide_image)
+            if verbose:
+                print(f"   ✅ {slides_with_images} Folienbilder geladen")
+
+            return True
+
+        except Exception as e:
+            if verbose:
+                print(f"   ⚠️  Fehler beim Laden der Folienbilder: {e}")
+            return False
+
+    def optimize(self, model: SlideModel, verbose: bool = True, pptx_path: Path | str = None) -> SlideModel:
         """
         Führt alle Accessibility-Optimierungen durch.
-        
+
         Args:
             model: Das zu optimierende SlideModel
             verbose: Fortschrittsausgabe
-            
+            pptx_path: Optional - Pfad zur PPTX für Folienbilder-Extraktion
+
         Returns:
             Optimiertes SlideModel (in-place modifiziert)
         """
         if verbose:
             print("\n♿ Accessibility-Optimierung...")
+
+        # Phase 0: Folienbilder laden (wenn PPTX-Pfad gegeben)
+        if pptx_path and self.config.use_vision_for_complex_slides:
+            self.load_slide_images(model, pptx_path, verbose)
 
         # Zähle ursprüngliche Elemente für Statistik
         self._original_block_count = sum(len(s.blocks) for s in model.slides)
@@ -726,16 +784,30 @@ Antworte nur mit A oder B."""
 
         # Typ-spezifische Prompts
         type_prompts = {
-            ComplexSlideType.TIMELINE: """Analysiere diese Folie. Es ist eine TIMELINE/ROADMAP.
+            ComplexSlideType.TIMELINE: """Analysiere diese Folie. Es ist eine TIMELINE/ROADMAP eines Projekts.
 
-Beschreibe für einen blinden Menschen:
-1. Den Gesamtzeitraum (von wann bis wann)
-2. Die Phasen/Meilensteine in CHRONOLOGISCHER Reihenfolge
-3. Was bereits abgeschlossen ist (Häkchen = erledigt)
-4. Was aktuell läuft und was geplant ist
+DEINE AUFGABE: Erstelle eine narrative Zusammenfassung für blinde Menschen.
 
-Wichtig: Folge den Pfeilen/der visuellen Zeitachse, NICHT der Textposition!
-Maximal 200 Wörter, Fließtext.""",
+STRUKTUR deiner Antwort (GENAU so):
+
+**ABGESCHLOSSEN:**
+[Liste alle Phasen mit Häkchen ✓ auf, chronologisch von früh nach spät.
+Nenne: Zeitraum, Name der Phase, Kerninhalt in einem Satz]
+
+**AKTUELL:**
+[Was läuft gerade? Erkennbar an: gelber Umrandung, "aktuell", oder fehlendem Häkchen bei frühem Datum.
+Nenne: Was wird entschieden/umgesetzt]
+
+**GEPLANT:**
+[Was kommt noch? Erkennbar an: zukünftigen Jahreszahlen ohne Häkchen.
+Nenne: Zeitraum und geplante Aktivitäten]
+
+WICHTIG:
+- Folge der ZEITLICHEN Reihenfolge (links→rechts, oben→unten auf Timeline)
+- Häkchen ✓ = abgeschlossen
+- Gelbe Umrandung = aktuell aktiv
+- Lies ALLE Textboxen, auch die kleinen
+- Maximal 300 Wörter""",
 
             ComplexSlideType.FLOWCHART: """Analysiere diese Folie. Es ist ein PROZESS/FLUSSDIAGRAMM.
 
@@ -801,31 +873,23 @@ Maximal 200 Wörter, Fließtext.""",
 
     def _analyze_slide_with_vision(self, slide: Slide, instruction: str) -> Optional[str]:
         """Analysiert Folie mit Vision-LLM und echtem Bild."""
-        prompt = f"""Du bist ein Experte für Barrierefreiheit. Deine Aufgabe: Beschreibe diese
-Präsentationsfolie so, dass ein blinder Mensch den INHALT vollständig versteht.
+        prompt = f"""Du bist ein Accessibility-Experte. Deine Aufgabe: Wandle diese visuelle
+Präsentationsfolie in TEXT um, den ein Screenreader vorlesen kann.
 
 Folientitel: "{slide.title or 'Ohne Titel'}"
 
-ANALYSIERE DAS BILD SCHRITT FÜR SCHRITT:
-
-1. STRUKTUR: Was für ein Diagramm/Layout siehst du?
-   (Timeline? Prozess? Organigramm? Vergleich? Liste?)
-
-2. VISUELLE HINWEISE beachten:
-   - Pfeile → zeigen Richtung/Ablauf
-   - Häkchen ✓ → abgeschlossen/erledigt
-   - Farben → Gruppierungen oder Status
-   - Position → zeitliche oder hierarchische Ordnung
-
-3. INHALT in LOGISCHER Reihenfolge:
 {instruction}
 
-AUSGABE-FORMAT:
-- Beginne DIREKT mit dem Inhalt (NICHT "Diese Folie zeigt...")
-- Schreibe einen zusammenhängenden Fließtext (KEINE Aufzählungspunkte)
-- Beschreibe in der Reihenfolge, die SINN ergibt (chronologisch, hierarchisch, etc.)
-- Maximal 250 Wörter
-- Auf Deutsch
+REGELN FÜR DEINE AUSGABE:
+1. Schreibe auf Deutsch
+2. Beginne DIREKT mit dem Inhalt
+3. NICHT schreiben: "Diese Folie zeigt...", "Ich sehe...", "Das Bild zeigt..."
+4. Lies JEDEN Text auf der Folie, auch in kleinen Boxen
+5. Beachte visuelle Marker:
+   - ✓ Häkchen = abgeschlossen/erledigt
+   - Gelbe Umrandung = aktuell aktiv
+   - Pfeile = Reihenfolge/Fluss
+6. Ordne nach INHALTLICHER Logik, nicht nach Position
 
 Deine Beschreibung:"""
 
@@ -841,7 +905,7 @@ Deine Beschreibung:"""
                     "stream": False,
                     "options": {"temperature": 0.3, "num_predict": 500}
                 },
-                timeout=120  # Vision braucht länger
+                timeout=300  # 5 Minuten für komplexe Folien
             )
 
             if response.status_code == 200:

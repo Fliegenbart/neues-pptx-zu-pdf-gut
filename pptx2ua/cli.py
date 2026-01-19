@@ -41,7 +41,7 @@ class Pipeline:
         self,
         language: str = "de",
         ollama_url: str = "http://localhost:11434",
-        vision_model: str = "llava:13b",
+        vision_model: str = "qwen2.5vl:7b",
         enable_ai: bool = True,
         optimize_accessibility: bool = True,
         use_docling: bool = True,  # Docling bevorzugen wenn verfügbar
@@ -342,7 +342,7 @@ Mehr Info: https://github.com/your-org/pptx2ua
     convert_parser.add_argument("-o", "--output", help="Ausgabe PDF-Datei")
     convert_parser.add_argument("--lang", default="de", help="Dokumentsprache (default: de)")
     convert_parser.add_argument("--no-ai", action="store_true", help="Keine KI Alt-Text-Generierung")
-    convert_parser.add_argument("--model", default="llava:13b", help="Vision-Modell (Ollama)")
+    convert_parser.add_argument("--model", default="qwen2.5vl:7b", help="Vision-Modell (Ollama)")
     convert_parser.add_argument("--ollama-url", default="http://localhost:11434", help="Ollama URL")
     convert_parser.add_argument("--no-docling", action="store_true", help="Docling deaktivieren (nur Ollama)")
     convert_parser.add_argument("--skip-validation", action="store_true", help="Validierung überspringen")
